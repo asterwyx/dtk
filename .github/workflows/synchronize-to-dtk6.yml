@@ -59,12 +59,13 @@ jobs:
           git commit \
           -m "sync: from ${{ github.repository }}" \
           -m "Synchronize source files from ${{ github.repository }}." \
-          -m "Source-version: ${version}" \
-          -m "Source-pull-request: https://github.com/${{ github.repository }}/pull/${{ inputs.pull_number }}"
+          -m "Source-version: ${version}
+          Source-pull-request: https://github.com/${{ github.repository }}/pull/${{ inputs.pull_number }}"
           git push -f origin ${tbranch}
           cd ${{ github.workspace }}/dest
           gh repo set-default ${{ inputs.dest_repo }}
           result=$(gh pr list --base master --head ${tbranch} --state open)
           if [[ -z $result ]]; then
-            gh pr create -B master -H ${tbranch} --fill-first
+            gh pr create -B master -H ${tbranch} --title "sync: from ${{ github.repository }}" --body "Synchronize source files from ${{ github.repository }}.
+            Source-pull-request: https://github.com/${{ github.repository }}/pull/${{ inputs.pull_number }}"
           fi
