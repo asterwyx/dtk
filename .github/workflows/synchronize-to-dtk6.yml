@@ -45,15 +45,16 @@ jobs:
           git config --global user.email "packages@deepin.org"
           tbranch="sync-${{ inputs.pull_number }}"
           set -x
-          cd ${{ github.workspace }}/source
-          version=$(git describe)
           cd ${{ github.workspace }}/dest
           git checkout -b ${tbranch}
+          cd ${{ github.workspace }}/source
+          version=$(git describe)
           if [[ -f ${{ github.workspace }}/source/.syncexclude ]]; then
             rsync -avz --delete --exclude=.git --exclude=.obs --exclude=debian --exclude=archlinux --exclude-from=.syncexclude ${{ github.workspace }}/source ${{ github.workspace }}/dest
           else
             rsync -avz --delete --exclude=.git --exclude=.obs --exclude=debian --exclude=archlinux ${{ github.workspace }}/source/ ${{ github.workspace }}/dest/
           fi
+          cd ${{ github.workspace }}/dest
           git add :/
           git commit \
           -m "sync: from ${{ github.repository }}" \
