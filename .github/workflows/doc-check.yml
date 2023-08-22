@@ -1,0 +1,45 @@
+name: doxygen-check
+on:
+  workflow_call:
+    secrets:
+      APP_ID:
+        required: true
+      APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  DOXYGEN_CHECK:
+    container:
+      image: linuxdeepin/beige:base
+      options: --privileged
+      volumes:
+        - /sys/fs/cgroup:/sys/fs/cgroup
+        - /etc/machine-id:/etc/machine-id
+
+
+    runs-on: ubuntu-latest
+    env:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Test init base environment
+        shell: bash
+        run: |
+          echo ${GITHUB_REF}
+          echo "github.ref: ${{ github.ref }}"
+          echo "github.ref_name: ${{ github.ref_name }}"
+          echo "github.head_ref: ${{ github.head_ref }}"
+          echo "github.source_ref: ${{ github.base_ref }}"
+          echo ${{ github.ref }}
+          GITHUB_REF="${{ github.ref }}"
+          echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+          rm /etc/apt/sources.list
+          branch=${GITHUB_REF#refs/heads/}
+          if [[ "$branch" =~ ^"topic-" ]]; then
+            trimedBranch=${branch#topic-}
+            echo "deb [trusted=yes] https://ci.deepin.com/repo/obs/deepin:/CI:/topics:/${trimedBranch}/deepin_develop/ ./" >> /etc/apt/sources.list
+            echo "deb-src [trusted=yes] https://ci.deepin.com/repo/obs/deepin:/CI:/topics:/${trimedBranch}/deepin_develop/ ./" >> /etc/apt/sources.list
+          fi
+          cat /etc/apt/sources.list
