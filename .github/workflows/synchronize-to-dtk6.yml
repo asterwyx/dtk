@@ -59,6 +59,7 @@ jobs:
           fi
           cd ${{ github.workspace }}/dest
           difference=$(git diff)
+          echo "tbranch=${tbranch}" >> $GITHUB_OUTPUT
           if [[ ! -z ${difference} ]]; then
             echo "has_diff=true" >> $GITHUB_OUTPUT
           else
@@ -79,7 +80,7 @@ jobs:
           -m "Synchronize source files from ${{ github.repository }}." \
           -m "Source-version: ${version}
           Source-pull-request: https://github.com/${{ github.repository }}/pull/${{ inputs.pull_number }}"
-          git push --set-upstream origin ${tbranch}
+          git push -u -f origin ${{ steps.rsync.outputs.tbranch }}
           cd ${{ github.workspace }}/dest
           gh repo set-default ${{ inputs.dest_repo }}
           result=$(gh pr list --base master --head ${tbranch} --state open)
