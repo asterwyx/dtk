@@ -81,5 +81,5 @@ jobs:
           gh repo set-default ${{ inputs.dest_repo }}
           result=$(gh pr list --base master --head ${tbranch} --state open)
           if [[ -z $result ]]; then
-            gh pr create -B master -H ${tbranch} --fill -r linuxdeepin/dtk
+            gh pr create -B master -H ${tbranch} --fill
           fi
