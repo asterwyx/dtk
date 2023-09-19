@@ -73,6 +73,7 @@ jobs:
           git remote add self-upstream ${{ github.event.repository.clone_url }}
           git fetch --all
           version=$(git describe)
+          tbranch=${{ steps.rsync.outputs.tbranch }}
           cd ${{ github.workspace }}/dest
           git add :/
           git commit \
@@ -80,7 +81,7 @@ jobs:
           -m "Synchronize source files from ${{ github.repository }}." \
           -m "Source-version: ${version}
           Source-pull-request: https://github.com/${{ github.repository }}/pull/${{ inputs.pull_number }}"
-          git push -u -f origin ${{ steps.rsync.outputs.tbranch }}
+          git push -u -f origin ${tbranch}
           cd ${{ github.workspace }}/dest
           gh repo set-default ${{ inputs.dest_repo }}
           result=$(gh pr list --base master --head ${tbranch} --state open)
