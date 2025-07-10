@@ -1,0 +1,319 @@
+name: Batch Release All DTK Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., 5.7.10)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes for all components'
+        required: false
+        type: string
+        default: 'Batch release all DTK components'
+
+env:
+  RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+  RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [dtkcommon, dtkcore, dtkgui, dtkwidget, dtkdeclarative, qt5integration, qt5platform-plugins]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version in changelog
+        run: |
+          cd ${{ matrix.component }}
+          
+          # Check if debian/changelog exists
+          if [ ! -f "debian/changelog" ]; then
+            echo "No debian/changelog found in ${{ matrix.component }}, skipping"
+            exit 0
+          fi
+          
+          # Get current version
+          current_version=$(dpkg-parsechangelog -S Version)
+          echo "Current version: $current_version"
+          
+          # Update changelog with new version
+          dch -v "${{ env.RELEASE_VERSION }}" "${{ env.RELEASE_NOTES }}"
+          
+          # Commit the version update
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add debian/changelog
+          git commit -m "chore: bump version to ${{ env.RELEASE_VERSION }}"
+          git push origin HEAD:${{ github.ref_name }}
+
+  auto-tag-dtkcommon:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkcommon
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-dtkcore:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkcore
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-dtkgui:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkgui
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-dtkwidget:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkwidget
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-dtkdeclarative:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkdeclarative
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-qt5integration:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qt5integration
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  auto-tag-qt5platform-plugins:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qt5platform-plugins
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call auto-tag workflow
+        uses: linuxdeepin/.github/.github/workflows/auto-tag.yml@master
+        secrets: inherit
+
+  build-distribution-dtkcommon:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkcommon
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-dtkcore:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkcore
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-dtkgui:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkgui
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-dtkwidget:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkwidget
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-dtkdeclarative:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dtkdeclarative
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-qt5integration:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qt5integration
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  build-distribution-qt5platform-plugins:
+    needs: update-versions
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qt5platform-plugins
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Call build-distribution workflow
+        uses: linuxdeepin/.github/.github/workflows/build-distribution.yml@master
+        secrets: inherit
+
+  create-summary:
+    needs: [update-versions, auto-tag-dtkcommon, auto-tag-dtkcore, auto-tag-dtkgui, auto-tag-dtkwidget, auto-tag-dtkdeclarative, auto-tag-qt5integration, auto-tag-qt5platform-plugins, build-distribution-dtkcommon, build-distribution-dtkcore, build-distribution-dtkgui, build-distribution-dtkwidget, build-distribution-dtkdeclarative, build-distribution-qt5integration, build-distribution-qt5platform-plugins]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Create release summary
+        run: |
+          echo "## DTK Batch Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Version:** ${{ env.RELEASE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Notes:** ${{ env.RELEASE_NOTES }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Components Processed:**" >> $GITHUB_STEP_SUMMARY
+          echo "- dtkcommon" >> $GITHUB_STEP_SUMMARY
+          echo "- dtkcore" >> $GITHUB_STEP_SUMMARY
+          echo "- dtkgui" >> $GITHUB_STEP_SUMMARY
+          echo "- dtkwidget" >> $GITHUB_STEP_SUMMARY
+          echo "- dtkdeclarative" >> $GITHUB_STEP_SUMMARY
+          echo "- qt5integration" >> $GITHUB_STEP_SUMMARY
+          echo "- qt5platform-plugins" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflows Triggered:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Version updates in debian/changelog" >> $GITHUB_STEP_SUMMARY
+          echo "- Auto-tag workflows for each component" >> $GITHUB_STEP_SUMMARY
+          echo "- Build-distribution workflows for each component" >> $GITHUB_STEP_SUMMARY
