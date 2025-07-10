@@ -1,0 +1,172 @@
+name: Release All DTK Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry run (test mode)'
+        required: false
+        default: false
+        type: boolean
+      selected_components:
+        description: 'Selected components (comma-separated, leave empty for all)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.setup.outputs.components }}
+      release_info: ${{ steps.setup.outputs.release_info }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup component list and release info
+        id: setup
+        run: |
+          # Define all DTK components from .gitmodules
+          ALL_COMPONENTS="dtkcommon,dtkcore,dtkgui,dtkwidget,dtkdeclarative,qt5integration,qt5platform-plugins"
+          
+          # Use selected components if provided, otherwise use all
+          if [[ -n "${{ github.event.inputs.selected_components }}" ]]; then
+            COMPONENTS="${{ github.event.inputs.selected_components }}"
+          else
+            COMPONENTS="$ALL_COMPONENTS"
+          fi
+          
+          # Convert to JSON array for matrix
+          COMPONENTS_JSON=$(echo "$COMPONENTS" | jq -R -s -c 'split(",") | map(select(length > 0))')
+          
+          echo "components=$COMPONENTS_JSON" >> $GITHUB_OUTPUT
+          echo "release_info={\"type\":\"${{ github.event.inputs.release_type }}\",\"dry_run\":${{ github.event.inputs.dry_run }}}" >> $GITHUB_OUTPUT
+          
+          echo "Will process components: $COMPONENTS"
+          echo "Release type: ${{ github.event.inputs.release_type }}"
+          echo "Dry run: ${{ github.event.inputs.dry_run }}"
+
+  trigger_releases:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: ${{ fromJson(needs.prepare.outputs.components) }}
+      fail-fast: false
+    steps:
+      - name: Setup GitHub CLI
+        run: |
+          # Ensure gh is available
+          which gh || (echo "GitHub CLI not found" && exit 1)
+
+      - name: Trigger release for ${{ matrix.component }}
+        id: trigger_release
+        continue-on-error: true
+        run: |
+          REPO="linuxdeepin/${{ matrix.component }}"
+          
+          echo "🚀 Triggering release for ${{ matrix.component }}..."
+          
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo "🧪 DRY RUN: Would trigger release workflow for $REPO"
+            echo "   Release type: ${{ github.event.inputs.release_type }}"
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=Dry run completed successfully" >> $GITHUB_OUTPUT
+          else
+            # Try to trigger the release workflow
+            # Note: This assumes each component has a 'release' workflow that accepts release_type input
+            gh workflow run release \
+              --repo "$REPO" \
+              --field release_type="${{ github.event.inputs.release_type }}" \
+              --field triggered_by="dtk-release-all" \
+              --field source_workflow="${{ github.run_id }}" || {
+                
+                # Fallback: try triggering auto-tag workflow if release workflow doesn't exist
+                echo "⚠️  Release workflow not found, trying auto-tag workflow..."
+                gh workflow run auto-tag \
+                  --repo "$REPO" \
+                  --field release_type="${{ github.event.inputs.release_type }}" || {
+                  
+                  # Fallback: try repository_dispatch
+                  echo "⚠️  Auto-tag workflow not found, trying repository_dispatch..."
+                  gh api repos/"$REPO"/dispatches \
+                    --method POST \
+                    --field event_type="release_trigger" \
+                    --field client_payload='{"release_type":"${{ github.event.inputs.release_type }}","triggered_by":"dtk-release-all","source_workflow":"${{ github.run_id }}"}' || {
+                    
+                    echo "❌ Failed to trigger release for ${{ matrix.component }}"
+                    echo "status=failed" >> $GITHUB_OUTPUT
+                    echo "message=Failed to trigger any release mechanism" >> $GITHUB_OUTPUT
+                    exit 1
+                  }
+                }
+              }
+            
+            echo "✅ Successfully triggered release for ${{ matrix.component }}"
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=Release triggered successfully" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report result for ${{ matrix.component }}
+        run: |
+          if [[ "${{ steps.trigger_release.outputs.status }}" == "success" ]]; then
+            echo "✅ ${{ matrix.component }}: ${{ steps.trigger_release.outputs.message }}"
+          else
+            echo "❌ ${{ matrix.component }}: ${{ steps.trigger_release.outputs.message }}"
+          fi
+
+  summary:
+    needs: [prepare, trigger_releases]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate release summary
+        run: |
+          echo "# DTK Components Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Type:** ${{ github.event.inputs.release_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ github.event.inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Components:** ${{ join(fromJson(needs.prepare.outputs.components), ', ') }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo "🧪 **This was a dry run - no actual releases were triggered**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Monitor individual component repositories for release progress" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check component release workflows at:" >> $GITHUB_STEP_SUMMARY
+          
+          # Add links to component repositories
+          for component in $(echo '${{ join(fromJson(needs.prepare.outputs.components), ' ') }}'); do
+            echo "   - [linuxdeepin/$component](https://github.com/linuxdeepin/$component/actions)" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "3. After all releases complete, consider updating submodule references in this repository" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check overall status
+        run: |
+          if [[ "${{ needs.trigger_releases.result }}" == "failure" ]]; then
+            echo "⚠️  Some component releases may have failed. Check the individual job results above."
+            exit 1
+          else
+            echo "✅ All component releases were triggered successfully!"
+          fi
