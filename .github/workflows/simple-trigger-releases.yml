@@ -1,0 +1,152 @@
+name: Simple Trigger Component Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      components:
+        description: 'Specific components to release (comma separated, empty for all)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run mode (only check, no actual trigger)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  GH_TOKEN: ${{ secrets.CI_ROBOT_PAT }}
+
+jobs:
+  trigger-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get components list
+        id: get_components
+        run: |
+          if [[ -n "${{ github.event.inputs.components }}" ]]; then
+            components="${{ github.event.inputs.components }}"
+          else
+            # Get all submodules from .gitmodules
+            components=$(grep '^\[submodule' .gitmodules | sed 's/\[submodule "\(.*\)"\]/\1/' | tr '\n' ',' | sed 's/,$//')
+          fi
+          echo "components=$components" >> $GITHUB_OUTPUT
+          echo "Components to process: $components"
+
+      - name: Process each component
+        run: |
+          components="${{ steps.get_components.outputs.components }}"
+          dry_run="${{ github.event.inputs.dry_run }}"
+          
+          echo "Processing components: $components"
+          echo "Dry run: $dry_run"
+          
+          # Convert comma-separated list to array
+          IFS=',' read -ra COMPONENT_ARRAY <<< "$components"
+          
+          for component in "${COMPONENT_ARRAY[@]}"; do
+            echo "=== Processing $component ==="
+            
+            if [[ ! -d "$component" ]]; then
+              echo "Component $component not found, skipping..."
+              continue
+            fi
+            
+            cd "$component"
+            
+            # Check if debian/changelog exists
+            if [[ ! -f "debian/changelog" ]]; then
+              echo "No debian/changelog found in $component, skipping..."
+              cd ..
+              continue
+            fi
+            
+            # Get current version
+            current_version=$(head -n1 debian/changelog | grep -oE '\([^)]+\)' | sed 's/[()]//g')
+            echo "Current version: $current_version"
+            
+            # Check for changes since last tag
+            last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [[ -n "$last_tag" ]]; then
+              changes=$(git log --oneline "$last_tag"..HEAD -- . | wc -l)
+            else
+              changes=$(git log --oneline -- . | wc -l)
+            fi
+            
+            echo "Changes since last tag: $changes"
+            
+            if [[ $changes -eq 0 ]]; then
+              echo "No changes detected, skipping..."
+              cd ..
+              continue
+            fi
+            
+            if [[ "$dry_run" == "true" ]]; then
+              echo "DRY RUN - Would trigger release for $component:"
+              echo "  Current version: $current_version"
+              echo "  Changes: $changes"
+            else
+              echo "Triggering release for $component..."
+              
+              # Create a temporary changelog entry to trigger auto-tag workflow
+              current_date=$(date -R)
+              temp_version=$(echo "$current_version" | awk -F. '{print $1 "." $2 "." $3+1}')
+              
+              # Backup original changelog
+              cp debian/changelog debian/changelog.backup
+              
+              # Create new changelog entry
+              cat > debian/changelog.new << EOF
+              $component ($temp_version) unstable; urgency=medium
+
+                * Trigger release from dtk repository
+
+               -- deepin-ci-robot <packages@deepin.org>  $current_date
+
+              EOF
+              
+              # Append original changelog
+              cat debian/changelog.backup >> debian/changelog.new
+              mv debian/changelog.new debian/changelog
+              
+              # Commit and push to trigger auto-tag workflow
+              git config --global user.name "deepin-ci-robot"
+              git config --global user.email "packages@deepin.org"
+              
+              git add debian/changelog
+              git commit -m "chore: trigger release for $component"
+              git push origin HEAD:master
+              
+              echo "Successfully triggered release for $component"
+              
+              # Restore original changelog
+              mv debian/changelog.backup debian/changelog
+              git add debian/changelog
+              git commit -m "chore: restore original changelog for $component"
+              git push origin HEAD:master
+            fi
+            
+            cd ..
+            echo ""
+          done
+
+      - name: Summary
+        run: |
+          echo "## Release Trigger Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Components processed:** ${{ steps.get_components.outputs.components }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry run:** ${{ github.event.inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo "✅ **Dry run completed** - No actual triggers were made" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Release triggers completed**" >> $GITHUB_STEP_SUMMARY
+          fi

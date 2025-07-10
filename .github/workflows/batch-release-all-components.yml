@@ -1,0 +1,232 @@
+name: Batch Release All DTK Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type (patch/minor/major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry run mode (only check, no actual release)'
+        required: false
+        default: false
+        type: boolean
+      components:
+        description: 'Specific components to release (comma separated, empty for all)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  GH_TOKEN: ${{ secrets.CI_ROBOT_PAT }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      components_to_release: ${{ steps.get_components.outputs.components }}
+      release_type: ${{ github.event.inputs.release_type }}
+      dry_run: ${{ github.event.inputs.dry_run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get components to release
+        id: get_components
+        run: |
+          if [[ -n "${{ github.event.inputs.components }}" ]]; then
+            echo "components=${{ github.event.inputs.components }}" >> $GITHUB_OUTPUT
+          else
+            # Get all submodules from .gitmodules
+            components=$(grep '^\[submodule' .gitmodules | sed 's/\[submodule "\(.*\)"\]/\1/' | tr '\n' ',' | sed 's/,$//')
+            echo "components=$components" >> $GITHUB_OUTPUT
+          fi
+          echo "Components to process: $components"
+
+      - name: Show release configuration
+        run: |
+          echo "Release type: ${{ github.event.inputs.release_type }}"
+          echo "Dry run: ${{ github.event.inputs.dry_run }}"
+          echo "Components: ${{ steps.get_components.outputs.components }}"
+
+  check-components:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: ${{ fromJson(format('[{0}]', needs.prepare.outputs.components_to_release)) }}
+    outputs:
+      needs_release: ${{ steps.check_changes.outputs.needs_release }}
+      current_version: ${{ steps.check_changes.outputs.current_version }}
+      new_version: ${{ steps.check_changes.outputs.new_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Check component changes
+        id: check_changes
+        run: |
+          cd ${{ matrix.component }}
+          
+          # Get current version from debian/changelog
+          if [[ -f debian/changelog ]]; then
+            current_version=$(head -n1 debian/changelog | grep -oE '\([^)]+\)' | sed 's/[()]//g')
+            echo "current_version=$current_version" >> $GITHUB_OUTPUT
+          else
+            echo "No debian/changelog found in ${{ matrix.component }}"
+            echo "current_version=" >> $GITHUB_OUTPUT
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if there are changes since last tag
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [[ -n "$last_tag" ]]; then
+            changes=$(git log --oneline $last_tag..HEAD -- . | wc -l)
+          else
+            changes=$(git log --oneline -- . | wc -l)
+          fi
+          
+          if [[ $changes -gt 0 ]]; then
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+            
+            # Calculate new version based on release type
+            if [[ "${{ needs.prepare.outputs.release_type }}" == "major" ]]; then
+              new_version=$(echo $current_version | awk -F. '{print $1+1 ".0.0"}')
+            elif [[ "${{ needs.prepare.outputs.release_type }}" == "minor" ]]; then
+              new_version=$(echo $current_version | awk -F. '{print $1 "." $2+1 ".0"}')
+            else
+              new_version=$(echo $current_version | awk -F. '{print $1 "." $2 "." $3+1}')
+            fi
+            echo "new_version=$new_version" >> $GITHUB_OUTPUT
+            
+            echo "Component ${{ matrix.component }} needs release:"
+            echo "  Current version: $current_version"
+            echo "  New version: $new_version"
+            echo "  Changes since last tag: $changes"
+          else
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+            echo "new_version=" >> $GITHUB_OUTPUT
+            echo "Component ${{ matrix.component }} has no changes since last tag"
+          fi
+
+  release-components:
+    needs: [prepare, check-components]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: ${{ fromJson(format('[{0}]', needs.prepare.outputs.components_to_release)) }}
+    if: ${{ needs.check-components.outputs.needs_release == 'true' }}
+    steps:
+      - name: Checkout component repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          repository: linuxdeepin/${{ matrix.component }}
+          ref: master
+          fetch-depth: 0
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "deepin-ci-robot"
+          git config --global user.email "packages@deepin.org"
+
+      - name: Create release branch
+        run: |
+          release_branch="release/v${{ needs.check-components.outputs.new_version }}"
+          git checkout -b $release_branch
+          echo "Created release branch: $release_branch"
+
+      - name: Update version in debian/changelog
+        if: ${{ needs.prepare.outputs.dry_run == 'false' }}
+        run: |
+          new_version="${{ needs.check-components.outputs.new_version }}"
+          current_date=$(date -R)
+          
+          # Create new changelog entry
+          cat > debian/changelog.new << EOF
+          ${{ matrix.component }} ($new_version) unstable; urgency=medium
+
+            * Batch release from dtk repository
+
+           -- deepin-ci-robot <packages@deepin.org>  $current_date
+
+          EOF
+          
+          # Append existing changelog
+          cat debian/changelog >> debian/changelog.new
+          mv debian/changelog.new debian/changelog
+          
+          echo "Updated debian/changelog with version $new_version"
+
+      - name: Commit and push changes
+        if: ${{ needs.prepare.outputs.dry_run == 'false' }}
+        run: |
+          git add debian/changelog
+          git commit -m "chore: bump version to ${{ needs.check-components.outputs.new_version }}"
+          git push origin $release_branch
+          echo "Pushed changes to $release_branch"
+
+      - name: Create Pull Request
+        if: ${{ needs.prepare.outputs.dry_run == 'false' }}
+        run: |
+          gh repo set-default linuxdeepin/${{ matrix.component }}
+          gh pr create \
+            --base master \
+            --head $release_branch \
+            --title "chore: release v${{ needs.check-components.outputs.new_version }}" \
+            --body "Automated release from dtk repository
+
+          - Release type: ${{ needs.prepare.outputs.release_type }}
+          - New version: ${{ needs.check-components.outputs.new_version }}
+          - Previous version: ${{ needs.check-components.outputs.current_version }}"
+
+      - name: Dry run summary
+        if: ${{ needs.prepare.outputs.dry_run == 'true' }}
+        run: |
+          echo "DRY RUN - Would release ${{ matrix.component }}:"
+          echo "  Current version: ${{ needs.check-components.outputs.current_version }}"
+          echo "  New version: ${{ needs.check-components.outputs.new_version }}"
+          echo "  Release type: ${{ needs.prepare.outputs.release_type }}"
+
+  summary:
+    needs: [prepare, check-components, release-components]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Release Summary
+        run: |
+          echo "## DTK Components Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Type:** ${{ needs.prepare.outputs.release_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ needs.prepare.outputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Processed:" >> $GITHUB_STEP_SUMMARY
+          
+          components="${{ needs.prepare.outputs.components_to_release }}"
+          for component in ${components//,/ }; do
+            echo "- **$component**" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Status:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.prepare.outputs.dry_run }}" == "true" ]]; then
+            echo "✅ **Dry run completed** - No actual releases were made" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Release process completed**" >> $GITHUB_STEP_SUMMARY
+          fi

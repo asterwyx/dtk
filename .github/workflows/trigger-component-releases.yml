@@ -1,0 +1,187 @@
+name: Trigger Component Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      components:
+        description: 'Specific components to release (comma separated, empty for all)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run mode (only check, no actual trigger)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  GH_TOKEN: ${{ secrets.CI_ROBOT_PAT }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      components_to_process: ${{ steps.get_components.outputs.components }}
+      dry_run: ${{ github.event.inputs.dry_run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get components to process
+        id: get_components
+        run: |
+          if [[ -n "${{ github.event.inputs.components }}" ]]; then
+            echo "components=${{ github.event.inputs.components }}" >> $GITHUB_OUTPUT
+          else
+            # Get all submodules from .gitmodules
+            components=$(grep '^\[submodule' .gitmodules | sed 's/\[submodule "\(.*\)"\]/\1/' | tr '\n' ',' | sed 's/,$//')
+            echo "components=$components" >> $GITHUB_OUTPUT
+          fi
+          echo "Components to process: $components"
+
+      - name: Show configuration
+        run: |
+          echo "Dry run: ${{ github.event.inputs.dry_run }}"
+          echo "Components: ${{ steps.get_components.outputs.components }}"
+
+  check-and-trigger:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: ${{ fromJson(format('[{0}]', needs.prepare.outputs.components_to_process)) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Check component status
+        id: check_status
+        run: |
+          cd ${{ matrix.component }}
+          
+          # Check if debian/changelog exists
+          if [[ ! -f debian/changelog ]]; then
+            echo "No debian/changelog found in ${{ matrix.component }}"
+            echo "has_changelog=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "has_changelog=true" >> $GITHUB_OUTPUT
+          
+          # Get current version
+          current_version=$(head -n1 debian/changelog | grep -oE '\([^)]+\)' | sed 's/[()]//g')
+          echo "current_version=$current_version" >> $GITHUB_OUTPUT
+          
+          # Check if there are changes since last tag
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [[ -n "$last_tag" ]]; then
+            changes=$(git log --oneline $last_tag..HEAD -- . | wc -l)
+          else
+            changes=$(git log --oneline -- . | wc -l)
+          fi
+          
+          echo "changes_count=$changes" >> $GITHUB_OUTPUT
+          
+          if [[ $changes -gt 0 ]]; then
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+            echo "Component ${{ matrix.component }} needs release:"
+            echo "  Current version: $current_version"
+            echo "  Changes since last tag: $changes"
+          else
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+            echo "Component ${{ matrix.component }} has no changes since last tag"
+          fi
+
+      - name: Trigger component release workflow
+        if: ${{ steps.check_status.outputs.needs_release == 'true' && steps.check_status.outputs.has_changelog == 'true' }}
+        run: |
+          if [[ "${{ needs.prepare.outputs.dry_run }}" == "true" ]]; then
+            echo "DRY RUN - Would trigger release for ${{ matrix.component }}:"
+            echo "  Current version: ${{ steps.check_status.outputs.current_version }}"
+            echo "  Changes: ${{ steps.check_status.outputs.changes_count }}"
+          else
+            echo "Triggering release for ${{ matrix.component }}..."
+            
+            # Create a temporary file with changelog content to trigger the auto-tag workflow
+            cd ${{ matrix.component }}
+            
+            # Create a temporary commit that modifies debian/changelog
+            # This will trigger the auto-tag workflow
+            temp_file="debian/changelog.temp"
+            cp debian/changelog $temp_file
+            
+            # Add a temporary entry to trigger the workflow
+            current_date=$(date -R)
+            temp_version="$(echo ${{ steps.check_status.outputs.current_version }} | awk -F. '{print $1 "." $2 "." $3+1}')"
+            
+            cat > debian/changelog.new << EOF
+            ${{ matrix.component }} ($temp_version) unstable; urgency=medium
+
+              * Trigger release from dtk repository
+
+             -- deepin-ci-robot <packages@deepin.org>  $current_date
+
+            EOF
+            
+            cat $temp_file >> debian/changelog.new
+            mv debian/changelog.new debian/changelog
+            
+            # Commit and push to trigger the workflow
+            git config --global user.name "deepin-ci-robot"
+            git config --global user.email "packages@deepin.org"
+            
+            git add debian/changelog
+            git commit -m "chore: trigger release for ${{ matrix.component }}"
+            git push origin HEAD:master
+            
+            echo "Triggered release workflow for ${{ matrix.component }}"
+          fi
+
+      - name: Skip component (no changes)
+        if: ${{ steps.check_status.outputs.needs_release == 'false' }}
+        run: |
+          echo "Skipping ${{ matrix.component }} - no changes detected"
+
+      - name: Skip component (no changelog)
+        if: ${{ steps.check_status.outputs.has_changelog == 'false' }}
+        run: |
+          echo "Skipping ${{ matrix.component }} - no debian/changelog found"
+
+  summary:
+    needs: [prepare, check-and-trigger]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Release Summary
+        run: |
+          echo "## DTK Components Release Trigger Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ needs.prepare.outputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Processed:" >> $GITHUB_STEP_SUMMARY
+          
+          components="${{ needs.prepare.outputs.components_to_process }}"
+          for component in ${components//,/ }; do
+            echo "- **$component**" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Trigger Status:" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.prepare.outputs.dry_run }}" == "true" ]]; then
+            echo "✅ **Dry run completed** - No actual triggers were made" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This workflow would trigger the auto-tag workflow for each component that has changes." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Release triggers completed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The auto-tag workflow has been triggered for components with changes." >> $GITHUB_STEP_SUMMARY
+          fi
