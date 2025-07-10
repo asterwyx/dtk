@@ -1,0 +1,56 @@
+name: Release DTK Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release for all components (e.g. 1.2.3)'
+        required: true
+        type: string
+
+env:
+  # Token with `repo` scope that has write access to all component repositories
+  GHA_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+
+jobs:
+  tag-and-release:
+    name: Tag & Release DTK components
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GHA_RELEASE_TOKEN }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup Git identity
+        run: |
+          git config --global user.email "release-bot@dtk"
+          git config --global user.name "DTK Release Bot"
+
+      - name: Tag & push every component repository
+        shell: bash
+        env:
+          GIT_TAG: "v${{ env.RELEASE_VERSION }}"
+        run: |
+          set -euo pipefail
+          echo "Creating/pushing tag ${GIT_TAG} for each DTK component..."
+          # Iterate over every submodule (including nested ones) and push tag
+          git submodule foreach --recursive '
+            echo "::group::Processing $name ($path)"
+            git fetch origin --tags
+            if git rev-parse -q --verify "refs/tags/${GIT_TAG}" >/dev/null; then
+              echo "Tag ${GIT_TAG} already exists in $name — skipping."
+            else
+              git tag -a "${GIT_TAG}" -m "Release ${GIT_TAG}"
+              git push origin "${GIT_TAG}"
+              echo "Pushed ${GIT_TAG} to $name"
+            fi
+            echo "::endgroup::"
+          '
+
+      - name: Summary
+        run: echo "Tagged and pushed ${GIT_TAG} for all DTK components."
